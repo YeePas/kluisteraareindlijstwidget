@@ -41,12 +41,7 @@ const faviconHref = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/favicon.svg`
 
 		<footer>
 			<button id="export-csv-btn" class="primary" type="button">Exporteer CSV (Spotify / Apple Music)</button>
-			<p class="hint">
-				Haalt per album alle nummers op (via iTunes) en downloadt een CSV met kolommen positie, album, artiest,
-				tracknummer en nummer, in de volgorde van je eindlijst. Bruikbaar om handmatig of via een
-				playlist-importtool (bv. Soundiiz, TuneMyMusic) een Spotify- of Apple Music-playlist samen te stellen.
-			</p>
-			<p class="hint" id="sync-status">Verbinden met Firebase...</p>
+			<p class="hint" id="sync-status"></p>
 		</footer>
 
 		<script>
@@ -157,10 +152,9 @@ const faviconHref = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/favicon.svg`
 			}
 
 			function persist() {
-				syncStatus.textContent = 'Opslaan...';
 				setDoc(docRef, { leaderboard: state.leaderboard, voorraad: state.voorraad })
 					.then(() => {
-						syncStatus.textContent = 'Live gesynchroniseerd via Firebase.';
+						syncStatus.textContent = '';
 					})
 					.catch((err) => {
 						console.error('Kon niet opslaan naar Firestore', err);
@@ -184,7 +178,7 @@ const faviconHref = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/favicon.svg`
 						setDoc(docRef, state).catch((err) => console.error('Kon eindlijst niet aanmaken', err));
 					}
 					renderAll();
-					syncStatus.textContent = 'Live gesynchroniseerd via Firebase.';
+					syncStatus.textContent = '';
 				},
 				(err) => {
 					console.error('Firestore sync error', err);
@@ -830,7 +824,11 @@ const faviconHref = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/favicon.svg`
 				font-size: 0.72rem;
 				letter-spacing: 0.08em;
 				text-transform: uppercase;
-				color: var(--muted);
+				color: var(--red);
+			}
+
+			#sync-status:empty {
+				display: none;
 			}
 
 			#voorraad-panel.dragover {
