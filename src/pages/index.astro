@@ -203,6 +203,40 @@ const faviconHref = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/favicon.svg`
 				});
 			}
 
+			// Sommige albums (bv. deluxe edities) komen niet in de album-zoekopdracht naar
+			// boven, maar wel via de nummer-zoekopdracht. Dan leiden we de albums daaruit af.
+			function searchItunesSongsAsAlbums(term) {
+				return new Promise((resolve, reject) => {
+					const callbackName = `itunesCb${jsonpCounter++}`;
+					const script = document.createElement('script');
+					window[callbackName] = (data) => {
+						const seen = new Set();
+						const albums = [];
+						for (const r of data.results ?? []) {
+							if (r.wrapperType !== 'track' || !r.collectionId) continue;
+							if (seen.has(r.collectionId)) continue;
+							seen.add(r.collectionId);
+							albums.push({
+								collectionId: r.collectionId,
+								artistName: r.artistName,
+								collectionName: r.collectionName,
+								artworkUrl100: r.artworkUrl100,
+							});
+						}
+						resolve(albums);
+						delete window[callbackName];
+						script.remove();
+					};
+					script.onerror = () => {
+						reject(new Error('Zoeken mislukt'));
+						delete window[callbackName];
+						script.remove();
+					};
+					script.src = `https://itunes.apple.com/search?entity=song&limit=25&term=${encodeURIComponent(term)}&callback=${callbackName}`;
+					document.body.appendChild(script);
+				});
+			}
+
 			function lookupTracks(collectionId) {
 				return new Promise((resolve, reject) => {
 					const callbackName = `itunesCb${jsonpCounter++}`;
@@ -275,6 +309,9 @@ const faviconHref = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/favicon.svg`
 				let results;
 				try {
 					results = await searchItunes(term);
+					if (results.length === 0) {
+						results = await searchItunesSongsAsAlbums(term);
+					}
 				} catch {
 					searchResults.innerHTML = '<li class="loading">Zoeken mislukt, probeer opnieuw.</li>';
 					return;
