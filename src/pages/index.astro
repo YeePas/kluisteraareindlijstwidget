@@ -1,0 +1,674 @@
+---
+const faviconHref = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/favicon.svg`;
+---
+
+<html lang="nl">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" type="image/svg+xml" href={faviconHref} />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="generator" content={Astro.generator} />
+		<title>Kluisteraar Eindlijst</title>
+	</head>
+	<body>
+		<header>
+			<h1>Kluisteraar Eindlijst</h1>
+			<p class="subtitle">Zoek albums op, sleep ze naar de lijst en zet ze op volgorde.</p>
+		</header>
+
+		<section class="search">
+			<form id="search-form">
+				<input id="search-term" type="text" placeholder="Artiest of albumtitel..." autocomplete="off" required />
+				<button type="submit">Zoeken</button>
+			</form>
+			<ul id="search-results" class="search-results" hidden></ul>
+		</section>
+
+		<main class="columns">
+			<section class="panel" id="voorraad-panel" data-drop="voorraad">
+				<h2>Voorraad</h2>
+				<p class="hint">Albums die nog niet in de lijst staan. Sleep een kaart naar rechts om een positie te geven.</p>
+				<div id="voorraad-grid" class="grid"></div>
+			</section>
+
+			<section class="panel">
+				<h2>Eindlijst</h2>
+				<p class="hint">Sleep kaarten om de volgorde te wijzigen. Sleep naar de lege plek onderaan om toe te voegen.</p>
+				<ol id="leaderboard-list" class="leaderboard"></ol>
+			</section>
+		</main>
+
+		<footer>
+			<button id="export-csv-btn" type="button">Exporteer CSV (Spotify / Apple Music)</button>
+			<p class="hint">
+				Haalt per album alle nummers op (via iTunes) en downloadt een CSV met kolommen positie, album, artiest,
+				tracknummer en nummer, in de volgorde van je eindlijst. Bruikbaar om handmatig of via een
+				playlist-importtool (bv. Soundiiz, TuneMyMusic) een Spotify- of Apple Music-playlist samen te stellen.
+			</p>
+			<p class="hint" id="sync-status">Verbinden met Firebase...</p>
+		</footer>
+
+		<script>
+			import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+			import { db } from '../lib/firebase';
+
+			const docRef = doc(db, 'eindlijst', 'main');
+
+			/** @type {{leaderboard: any[], voorraad: any[]}} */
+			let state = { leaderboard: [], voorraad: [] };
+
+			const voorraadGrid = document.getElementById('voorraad-grid');
+			const leaderboardList = document.getElementById('leaderboard-list');
+			const voorraadPanel = document.getElementById('voorraad-panel');
+			const searchForm = document.getElementById('search-form');
+			const searchTermInput = document.getElementById('search-term');
+			const searchResults = document.getElementById('search-results');
+			const syncStatus = document.getElementById('sync-status');
+			const exportCsvBtn = document.getElementById('export-csv-btn');
+
+			function higherResArtwork(url) {
+				return url.replace(/\d+x\d+bb\.jpg$/, '600x600bb.jpg');
+			}
+
+			function isKnown(id) {
+				return (
+					state.voorraad.some((a) => a.id === id) ||
+					state.leaderboard.some((a) => a.id === id)
+				);
+			}
+
+			function albumCardHtml(album) {
+				return `
+					<img src="${album.artwork}" alt="${album.title}" loading="lazy" />
+					<div class="card-info">
+						<strong>${album.title}</strong>
+						<span>${album.artist}</span>
+					</div>
+				`;
+			}
+
+			function renderVoorraad() {
+				voorraadGrid.innerHTML = '';
+				for (const album of state.voorraad) {
+					const card = document.createElement('div');
+					card.className = 'card';
+					card.draggable = true;
+					card.dataset.source = 'voorraad';
+					card.dataset.id = album.id;
+					card.innerHTML =
+						albumCardHtml(album) + `<button class="remove" data-remove-voorraad="${album.id}" title="Verwijderen">✕</button>`;
+					voorraadGrid.appendChild(card);
+				}
+			}
+
+			function renderLeaderboard() {
+				leaderboardList.innerHTML = '';
+
+				state.leaderboard.forEach((album, index) => {
+					const li = document.createElement('li');
+					li.className = 'slot filled';
+					li.dataset.drop = 'leaderboard';
+					li.dataset.index = String(index);
+
+					const card = document.createElement('div');
+					card.className = 'card';
+					card.draggable = true;
+					card.dataset.source = 'leaderboard';
+					card.dataset.index = String(index);
+					card.innerHTML =
+						albumCardHtml(album) + `<button class="remove" data-return-index="${index}" title="Terug naar voorraad">↩</button>`;
+
+					const position = document.createElement('span');
+					position.className = 'position';
+					position.textContent = String(index + 1);
+
+					li.appendChild(position);
+					li.appendChild(card);
+					leaderboardList.appendChild(li);
+				});
+
+				const emptySlot = document.createElement('li');
+				emptySlot.className = 'slot empty';
+				emptySlot.dataset.drop = 'leaderboard';
+				emptySlot.dataset.index = String(state.leaderboard.length);
+				const position = document.createElement('span');
+				position.className = 'position';
+				position.textContent = String(state.leaderboard.length + 1);
+				const emptyLabel = document.createElement('span');
+				emptyLabel.textContent = 'Sleep hier een album naartoe';
+				emptySlot.appendChild(position);
+				emptySlot.appendChild(emptyLabel);
+				leaderboardList.appendChild(emptySlot);
+			}
+
+			function renderAll() {
+				renderVoorraad();
+				renderLeaderboard();
+			}
+
+			function persist() {
+				syncStatus.textContent = 'Opslaan...';
+				setDoc(docRef, { leaderboard: state.leaderboard, voorraad: state.voorraad })
+					.then(() => {
+						syncStatus.textContent = 'Live gesynchroniseerd via Firebase.';
+					})
+					.catch((err) => {
+						console.error('Kon niet opslaan naar Firestore', err);
+						syncStatus.textContent = 'Opslaan mislukt, controleer je verbinding.';
+					});
+			}
+
+			function commit() {
+				renderAll();
+				persist();
+			}
+
+			onSnapshot(
+				docRef,
+				(snap) => {
+					if (snap.exists()) {
+						const data = snap.data();
+						state = { leaderboard: data.leaderboard ?? [], voorraad: data.voorraad ?? [] };
+					} else {
+						state = { leaderboard: [], voorraad: [] };
+						setDoc(docRef, state).catch((err) => console.error('Kon eindlijst niet aanmaken', err));
+					}
+					renderAll();
+					syncStatus.textContent = 'Live gesynchroniseerd via Firebase.';
+				},
+				(err) => {
+					console.error('Firestore sync error', err);
+					syncStatus.textContent = 'Verbinden mislukt, controleer de Firebase-config.';
+				},
+			);
+
+			// --- Search (JSONP, since the iTunes Search API has no CORS headers for fetch) ---
+			let jsonpCounter = 0;
+			function searchItunes(term) {
+				return new Promise((resolve, reject) => {
+					const callbackName = `itunesCb${jsonpCounter++}`;
+					const script = document.createElement('script');
+					window[callbackName] = (data) => {
+						resolve(data.results ?? []);
+						delete window[callbackName];
+						script.remove();
+					};
+					script.onerror = () => {
+						reject(new Error('Zoeken mislukt'));
+						delete window[callbackName];
+						script.remove();
+					};
+					script.src = `https://itunes.apple.com/search?entity=album&limit=10&term=${encodeURIComponent(term)}&callback=${callbackName}`;
+					document.body.appendChild(script);
+				});
+			}
+
+			function lookupTracks(collectionId) {
+				return new Promise((resolve, reject) => {
+					const callbackName = `itunesCb${jsonpCounter++}`;
+					const script = document.createElement('script');
+					window[callbackName] = (data) => {
+						const tracks = (data.results ?? []).filter((r) => r.wrapperType === 'track');
+						resolve(tracks);
+						delete window[callbackName];
+						script.remove();
+					};
+					script.onerror = () => {
+						reject(new Error('Tracklist ophalen mislukt'));
+						delete window[callbackName];
+						script.remove();
+					};
+					script.src = `https://itunes.apple.com/lookup?id=${encodeURIComponent(collectionId)}&entity=song&callback=${callbackName}`;
+					document.body.appendChild(script);
+				});
+			}
+
+			function csvEscape(value) {
+				const str = String(value ?? '');
+				return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+			}
+
+			exportCsvBtn.addEventListener('click', async () => {
+				if (state.leaderboard.length === 0) {
+					alert('De eindlijst is nog leeg.');
+					return;
+				}
+
+				exportCsvBtn.disabled = true;
+				const rows = [['Positie', 'Album', 'Artiest', 'Tracknummer', 'Nummer']];
+
+				for (let i = 0; i < state.leaderboard.length; i++) {
+					const album = state.leaderboard[i];
+					exportCsvBtn.textContent = `Bezig... (${i + 1}/${state.leaderboard.length})`;
+					try {
+						const tracks = await lookupTracks(album.id);
+						for (const track of tracks) {
+							rows.push([i + 1, album.title, album.artist, track.trackNumber ?? '', track.trackName ?? '']);
+						}
+					} catch (err) {
+						console.error(`Kon tracks voor "${album.title}" niet ophalen`, err);
+						rows.push([i + 1, album.title, album.artist, '', '(tracklist niet gevonden)']);
+					}
+				}
+
+				const csv = rows.map((row) => row.map(csvEscape).join(',')).join('\n');
+				const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+				const url = URL.createObjectURL(blob);
+				const a = document.createElement('a');
+				a.href = url;
+				a.download = 'eindlijst-tracklist.csv';
+				a.click();
+				URL.revokeObjectURL(url);
+
+				exportCsvBtn.disabled = false;
+				exportCsvBtn.textContent = 'Exporteer CSV (Spotify / Apple Music)';
+			});
+
+			searchForm.addEventListener('submit', async (e) => {
+				e.preventDefault();
+				const term = searchTermInput.value.trim();
+				if (!term) return;
+
+				searchResults.hidden = false;
+				searchResults.innerHTML = '<li class="loading">Zoeken...</li>';
+
+				let results;
+				try {
+					results = await searchItunes(term);
+				} catch {
+					searchResults.innerHTML = '<li class="loading">Zoeken mislukt, probeer opnieuw.</li>';
+					return;
+				}
+
+				if (results.length === 0) {
+					searchResults.innerHTML = '<li class="loading">Niks gevonden.</li>';
+					return;
+				}
+
+				searchResults.innerHTML = '';
+				for (const result of results) {
+					const id = String(result.collectionId);
+					const album = {
+						id,
+						artist: result.artistName,
+						title: result.collectionName,
+						artwork: higherResArtwork(result.artworkUrl100),
+					};
+
+					const li = document.createElement('li');
+					li.className = 'result';
+					const added = isKnown(id);
+					li.innerHTML = `
+						<img src="${album.artwork}" alt="${album.title}" loading="lazy" />
+						<div class="card-info">
+							<strong>${album.title}</strong>
+							<span>${album.artist}</span>
+						</div>
+						<button data-add='${JSON.stringify(album)}' ${added ? 'disabled' : ''}>${added ? 'Toegevoegd' : '+ Toevoegen'}</button>
+					`;
+					searchResults.appendChild(li);
+				}
+			});
+
+			document.addEventListener('click', (e) => {
+				if (searchResults.hidden) return;
+				if (e.target.closest('#search-form') || e.target.closest('#search-results')) return;
+				searchResults.hidden = true;
+			});
+
+			searchResults.addEventListener('click', (e) => {
+				const btn = e.target.closest('button[data-add]');
+				if (!btn) return;
+				const album = JSON.parse(btn.dataset.add);
+				if (isKnown(album.id)) return;
+				state.voorraad.push(album);
+				btn.disabled = true;
+				btn.textContent = 'Toegevoegd';
+				commit();
+			});
+
+			// --- Remove / return buttons ---
+			voorraadGrid.addEventListener('click', (e) => {
+				const btn = e.target.closest('button[data-remove-voorraad]');
+				if (!btn) return;
+				const id = btn.dataset.removeVoorraad;
+				state.voorraad = state.voorraad.filter((a) => a.id !== id);
+				commit();
+			});
+
+			leaderboardList.addEventListener('click', (e) => {
+				const btn = e.target.closest('button[data-return-index]');
+				if (!btn) return;
+				const index = Number(btn.dataset.returnIndex);
+				const [album] = state.leaderboard.splice(index, 1);
+				state.voorraad.push(album);
+				commit();
+			});
+
+			// --- Drag and drop ---
+			document.addEventListener('dragstart', (e) => {
+				const card = e.target.closest('[draggable="true"]');
+				if (!card) return;
+				const payload =
+					card.dataset.source === 'voorraad'
+						? { source: 'voorraad', id: card.dataset.id }
+						: { source: 'leaderboard', index: Number(card.dataset.index) };
+				e.dataTransfer.setData('text/plain', JSON.stringify(payload));
+				e.dataTransfer.effectAllowed = 'move';
+			});
+
+			function findDropTarget(e) {
+				return e.target.closest('[data-drop]');
+			}
+
+			document.addEventListener('dragover', (e) => {
+				const target = findDropTarget(e);
+				if (!target) return;
+				e.preventDefault();
+				target.classList.add('dragover');
+			});
+
+			document.addEventListener('dragleave', (e) => {
+				const target = findDropTarget(e);
+				if (!target) return;
+				target.classList.remove('dragover');
+			});
+
+			document.addEventListener('drop', (e) => {
+				const target = findDropTarget(e);
+				if (!target) return;
+				e.preventDefault();
+				target.classList.remove('dragover');
+
+				const raw = e.dataTransfer.getData('text/plain');
+				if (!raw) return;
+				const payload = JSON.parse(raw);
+
+				if (target.dataset.drop === 'voorraad') {
+					if (payload.source !== 'leaderboard') return;
+					const [album] = state.leaderboard.splice(payload.index, 1);
+					state.voorraad.push(album);
+					commit();
+					return;
+				}
+
+				// dropping onto the leaderboard
+				let targetIndex = Number(target.dataset.index);
+
+				if (payload.source === 'voorraad') {
+					const sourceIdx = state.voorraad.findIndex((a) => a.id === payload.id);
+					if (sourceIdx === -1) return;
+					const [album] = state.voorraad.splice(sourceIdx, 1);
+					state.leaderboard.splice(targetIndex, 0, album);
+				} else {
+					const sourceIndex = payload.index;
+					if (sourceIndex === targetIndex) return;
+					const [album] = state.leaderboard.splice(sourceIndex, 1);
+					if (sourceIndex < targetIndex) targetIndex -= 1;
+					state.leaderboard.splice(targetIndex, 0, album);
+				}
+
+				commit();
+			});
+		</script>
+
+		<style is:global>
+			:root {
+				color-scheme: dark;
+				--bg: #14151a;
+				--panel: #1d1f27;
+				--border: #2f323d;
+				--text: #ececf1;
+				--muted: #9497a6;
+				--accent: #e0a458;
+			}
+
+			* {
+				box-sizing: border-box;
+			}
+
+			body {
+				margin: 0;
+				padding: 2rem;
+				background: var(--bg);
+				color: var(--text);
+				font-family: system-ui, -apple-system, sans-serif;
+			}
+
+			header h1 {
+				margin: 0 0 0.25rem;
+				font-size: 1.75rem;
+			}
+
+			.subtitle,
+			.hint {
+				color: var(--muted);
+				font-size: 0.9rem;
+				margin: 0.25rem 0 1rem;
+			}
+
+			.search {
+				margin-bottom: 2rem;
+				position: relative;
+			}
+
+			#search-form {
+				display: flex;
+				gap: 0.5rem;
+			}
+
+			#search-term {
+				flex: 1;
+				padding: 0.6rem 0.8rem;
+				border-radius: 6px;
+				border: 1px solid var(--border);
+				background: var(--panel);
+				color: var(--text);
+				font-size: 1rem;
+			}
+
+			button {
+				padding: 0.6rem 1rem;
+				border-radius: 6px;
+				border: 1px solid var(--border);
+				background: var(--accent);
+				color: #1a1a1a;
+				font-weight: 600;
+				cursor: pointer;
+			}
+
+			button:disabled {
+				background: var(--border);
+				color: var(--muted);
+				cursor: default;
+			}
+
+			.search-results {
+				list-style: none;
+				margin: 0.5rem 0 0;
+				padding: 0;
+				position: absolute;
+				z-index: 10;
+				width: 100%;
+				background: var(--panel);
+				border: 1px solid var(--border);
+				border-radius: 8px;
+				max-height: 320px;
+				overflow-y: auto;
+			}
+
+			.search-results li.result,
+			.search-results li.loading {
+				display: flex;
+				align-items: center;
+				gap: 0.75rem;
+				padding: 0.5rem 0.75rem;
+				border-bottom: 1px solid var(--border);
+			}
+
+			.search-results li.loading {
+				color: var(--muted);
+			}
+
+			.search-results img {
+				width: 40px;
+				height: 40px;
+				border-radius: 4px;
+				object-fit: cover;
+			}
+
+			.search-results .card-info {
+				flex: 1;
+				display: flex;
+				flex-direction: column;
+				font-size: 0.85rem;
+			}
+
+			.search-results .card-info span {
+				color: var(--muted);
+			}
+
+			.columns {
+				display: grid;
+				grid-template-columns: 1fr 1fr;
+				gap: 1.5rem;
+			}
+
+			.panel {
+				background: var(--panel);
+				border: 1px solid var(--border);
+				border-radius: 10px;
+				padding: 1.25rem;
+			}
+
+			.panel h2 {
+				margin-top: 0;
+			}
+
+			.grid {
+				display: grid;
+				grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+				gap: 0.75rem;
+				min-height: 120px;
+			}
+
+			.card {
+				position: relative;
+				background: var(--bg);
+				border: 1px solid var(--border);
+				border-radius: 8px;
+				overflow: hidden;
+				cursor: grab;
+			}
+
+			.card img {
+				width: 100%;
+				aspect-ratio: 1;
+				object-fit: cover;
+				display: block;
+			}
+
+			.card .card-info {
+				padding: 0.5rem;
+				font-size: 0.8rem;
+				display: flex;
+				flex-direction: column;
+				gap: 0.15rem;
+			}
+
+			.card .card-info span {
+				color: var(--muted);
+			}
+
+			.card .remove {
+				position: absolute;
+				top: 0.35rem;
+				right: 0.35rem;
+				padding: 0.1rem 0.4rem;
+				font-size: 0.75rem;
+				line-height: 1.4;
+				background: rgba(0, 0, 0, 0.6);
+				color: var(--text);
+				border: none;
+			}
+
+			.leaderboard {
+				list-style: none;
+				margin: 0;
+				padding: 0;
+				display: flex;
+				flex-direction: column;
+				gap: 0.6rem;
+			}
+
+			.slot {
+				display: flex;
+				align-items: center;
+				gap: 0.75rem;
+				border-radius: 8px;
+				border: 1px dashed var(--border);
+				padding: 0.4rem;
+				min-height: 56px;
+			}
+
+			.slot.filled {
+				border-style: solid;
+			}
+
+			.slot.empty {
+				color: var(--muted);
+				font-size: 0.85rem;
+			}
+
+			.slot.dragover {
+				border-color: var(--accent);
+				background: rgba(224, 164, 88, 0.08);
+			}
+
+			.position {
+				font-weight: 700;
+				font-size: 1.1rem;
+				color: var(--accent);
+				width: 1.75rem;
+				text-align: center;
+				flex-shrink: 0;
+			}
+
+			.slot .card {
+				flex: 1;
+				display: flex;
+				align-items: center;
+				gap: 0.6rem;
+				cursor: grab;
+			}
+
+			.slot .card img {
+				width: 48px;
+				height: 48px;
+				border-radius: 4px;
+				flex-shrink: 0;
+			}
+
+			.slot .card .card-info {
+				flex: 1;
+				padding: 0;
+			}
+
+			footer {
+				margin-top: 2rem;
+				border-top: 1px solid var(--border);
+				padding-top: 1.5rem;
+			}
+
+			#voorraad-panel.dragover {
+				border-color: var(--accent);
+			}
+
+			@media (max-width: 700px) {
+				.columns {
+					grid-template-columns: 1fr;
+				}
+			}
+		</style>
+	</body>
+</html>
