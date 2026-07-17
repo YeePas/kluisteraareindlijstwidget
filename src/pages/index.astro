@@ -77,12 +77,21 @@ const faviconHref = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/favicon.svg`
 				);
 			}
 
+			function escapeHtml(value) {
+				return String(value ?? '')
+					.replaceAll('&', '&amp;')
+					.replaceAll('<', '&lt;')
+					.replaceAll('>', '&gt;')
+					.replaceAll('"', '&quot;')
+					.replaceAll("'", '&#39;');
+			}
+
 			function albumCardHtml(album) {
 				return `
-					<img src="${album.artwork}" alt="${album.title}" loading="lazy" />
+					<img src="${escapeHtml(album.artwork)}" alt="${escapeHtml(album.title)}" loading="lazy" />
 					<div class="card-info">
-						<strong>${album.title}</strong>
-						<span>${album.artist}</span>
+						<strong>${escapeHtml(album.title)}</strong>
+						<span>${escapeHtml(album.artist)}</span>
 					</div>
 				`;
 			}
@@ -334,15 +343,27 @@ const faviconHref = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/favicon.svg`
 
 					const li = document.createElement('li');
 					li.className = 'result';
+
+					const img = document.createElement('img');
+					img.src = album.artwork;
+					img.alt = album.title;
+					img.loading = 'lazy';
+
+					const info = document.createElement('div');
+					info.className = 'card-info';
+					const title = document.createElement('strong');
+					title.textContent = album.title;
+					const artist = document.createElement('span');
+					artist.textContent = album.artist;
+					info.append(title, artist);
+
+					const btn = document.createElement('button');
 					const added = isKnown(id);
-					li.innerHTML = `
-						<img src="${album.artwork}" alt="${album.title}" loading="lazy" />
-						<div class="card-info">
-							<strong>${album.title}</strong>
-							<span>${album.artist}</span>
-						</div>
-						<button data-add='${JSON.stringify(album)}' ${added ? 'disabled' : ''}>${added ? 'Toegevoegd' : '+ Toevoegen'}</button>
-					`;
+					btn.disabled = added;
+					btn.textContent = added ? 'Toegevoegd' : '+ Toevoegen';
+					btn._album = album;
+
+					li.append(img, info, btn);
 					searchResults.appendChild(li);
 				}
 			});
@@ -354,9 +375,9 @@ const faviconHref = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/favicon.svg`
 			});
 
 			searchResults.addEventListener('click', (e) => {
-				const btn = e.target.closest('button[data-add]');
+				const btn = e.target.closest('button');
 				if (!btn) return;
-				const album = JSON.parse(btn.dataset.add);
+				const album = btn._album;
 				if (isKnown(album.id)) return;
 				state.voorraad.push(album);
 				btn.disabled = true;
