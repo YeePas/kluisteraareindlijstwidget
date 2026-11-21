@@ -11,6 +11,17 @@ const faviconHref = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/favicon.svg`
 		<title>Kluisteraar Eindlijst</title>
 	</head>
 	<body>
+		<div id="lock-gate" class="lock-gate">
+			<form id="lock-form" class="lock-box">
+				<p class="eyebrow">Beveiligd</p>
+				<h2 class="lock-title">Eindlijst bewerken</h2>
+				<p class="hint">Voer het wachtwoord in om de lijst te bewerken.</p>
+				<input id="lock-input" type="password" placeholder="Wachtwoord" autocomplete="current-password" required />
+				<button type="submit">Ontgrendelen</button>
+				<p class="hint lock-error" id="lock-error" hidden>Onjuist wachtwoord.</p>
+			</form>
+		</div>
+
 		<header>
 			<p class="eyebrow">Luisterlijst</p>
 			<h1>Kluisteraar Eindlijst</h1>
@@ -48,6 +59,42 @@ const faviconHref = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/favicon.svg`
 			import { db } from '../lib/firebase';
 
 			const docRef = doc(db, 'eindlijst', 'main');
+
+			// --- Eenvoudige wachtwoordpoort (bewust licht: houdt gewone bezoekers buiten;
+			// geen harde beveiliging, want de Firestore-schrijfregels blijven open) ---
+			const PW_HASH = '821713fad1075e18471e008705ef3f8a0a3e2bca4948efd750947808a012935c';
+			const gate = document.getElementById('lock-gate');
+			const gateForm = document.getElementById('lock-form');
+			const gateInput = document.getElementById('lock-input');
+			const gateError = document.getElementById('lock-error');
+
+			async function sha256Hex(text) {
+				const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+				return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+			}
+
+			try {
+				if (gate && localStorage.getItem('eindlijst-unlocked') === PW_HASH) {
+					gate.hidden = true;
+				}
+			} catch {}
+
+			if (gateForm) {
+				gateForm.addEventListener('submit', async (e) => {
+					e.preventDefault();
+					const entered = await sha256Hex(gateInput.value);
+					if (entered === PW_HASH) {
+						if (gateError) gateError.hidden = true;
+						try {
+							localStorage.setItem('eindlijst-unlocked', PW_HASH);
+						} catch {}
+						if (gate) gate.hidden = true;
+					} else if (gateError) {
+						gateError.hidden = false;
+					}
+					gateInput.value = '';
+				});
+			}
 
 			/** @type {{leaderboard: any[], voorraad: any[]}} */
 			let state = { leaderboard: [], voorraad: [] };
@@ -485,6 +532,60 @@ const faviconHref = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/favicon.svg`
 
 			* {
 				box-sizing: border-box;
+			}
+
+			.lock-gate {
+				position: fixed;
+				inset: 0;
+				z-index: 100;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				padding: 2rem;
+				background: var(--bg);
+			}
+
+			.lock-gate[hidden] {
+				display: none;
+			}
+
+			.lock-box {
+				width: 100%;
+				max-width: 360px;
+				display: flex;
+				flex-direction: column;
+				gap: 0.6rem;
+				padding: 1.6rem;
+				border: 1px solid var(--border);
+				background: var(--surface);
+				border-radius: var(--radius);
+			}
+
+			.lock-title {
+				margin: 0;
+				font-family: var(--font-sans);
+				font-size: 1.3rem;
+				font-weight: 800;
+				letter-spacing: -0.01em;
+			}
+
+			.lock-box input {
+				padding: 0.7rem 0.85rem;
+				border: 1px solid var(--border);
+				border-radius: var(--radius);
+				background: var(--surface);
+				color: var(--text);
+				font-family: var(--font-sans);
+				font-size: max(0.95rem, 16px);
+			}
+
+			.lock-box input:focus {
+				outline: none;
+				border-color: var(--accent);
+			}
+
+			.lock-error {
+				color: var(--red);
 			}
 
 			body {
